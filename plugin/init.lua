@@ -214,7 +214,7 @@ function pub.apply_to_config(config)
 	table.insert(config.keys, {
 		key = "S",
 		mods = "LEADER",
-		action = pub.switch_workspace(),
+		action = pub.switch_to_prev_workspace(),
 	})
 end
 
@@ -223,7 +223,7 @@ function pub.switch_to_prev_workspace()
 		local current_workspace = window:active_workspace()
 		local previous_workspace = wezterm.GLOBAL.previous_workspace
 
-		if current_workspace == previous_workspace and previous_workspace ~= nil then
+		if current_workspace == previous_workspace or previous_workspace == nil then
 			return
 		end
 
