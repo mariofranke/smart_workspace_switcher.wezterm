@@ -14,14 +14,10 @@ local is_windows = string.find(wezterm.target_triple, "windows") ~= nil
 
 ---@class public_module
 ---@field zoxide_path string
----@field use_wsl boolean
----@field wsl_distro string
 ---@field choices {get_zoxide_elements: (fun(choices: InputSelector_choices, opts: choice_opts?): InputSelector_choices), get_workspace_elements: (fun(choices: InputSelector_choices): (InputSelector_choices, workspace_ids))}
 ---@field workspace_formatter fun(label: string): string
 local pub = {
 	zoxide_path = "zoxide",
-	use_wsl = false,
-	wsl_distro = "Ubuntu",
 	choices = {},
 	workspace_formatter = function(label)
 		return wezterm.format({
@@ -30,55 +26,13 @@ local pub = {
 	end,
 }
 
----Converts WSL path to Windows UNC path
----@param wsl_path string
----@param distro string
----@return string
-local function wsl_to_windows_path(wsl_path, distro)
-	-- Remove trailing newline/whitespace
-	wsl_path = wsl_path:gsub("^%s*(.-)%s*$", "%1")
-	
-	-- Convert /home/user/... to \\wsl$\Ubuntu\home\user\...
-	-- Also handle /mnt/c/... paths (which should become C:\...)
-	if wsl_path:match("^/mnt/(%a)/") then
-		-- Convert /mnt/c/foo to C:\foo
-		local drive, rest = wsl_path:match("^/mnt/(%a)/(.*)$")
-		return drive:upper() .. ":\\" .. rest:gsub("/", "\\")
-	else
-		-- Convert regular WSL path to UNC path
-		return "\\\\" .. "wsl$\\" .. distro .. wsl_path:gsub("/", "\\")
-	end
-end
-
----Converts Windows path to display format (shortened)
----@param windows_path string
----@return string
-local function format_display_path(windows_path)
-	-- For UNC paths like \\wsl$\Ubuntu\home\user\project, show as ~/project or nice format
-	local unc_path = windows_path:match("^\\\\wsl%$\\[^\\]+\\home\\[^\\]+\\(.*)$")
-	if unc_path then
-		return "~/" .. unc_path:gsub("\\", "/")
-	end
-	
-	-- For /mnt/c style that became C:\..., keep as is but shorten
-	return windows_path:gsub(wezterm.home_dir, "~")
-end
-
 ---@param cmd string
 ---@return string
 local run_child_process = function(cmd)
 	local process_args = { os.getenv("SHELL"), "-c", cmd }
-	
 	if is_windows then
-		if pub.use_wsl then
-			-- Wrap command to run in WSL
-			-- Use wsl.exe -d <distro> -e sh -c "command"
-			process_args = { "wsl", "-d", pub.wsl_distro, "-e", "sh", "-c", cmd }
-		else
-			process_args = { "cmd", "/c", cmd }
-		end
+		process_args = { "cmd", "/c", cmd }
 	end
-	
 	local success, stdout, stderr = wezterm.run_child_process(process_args)
 
 	if not success then
@@ -112,24 +66,12 @@ function pub.choices.get_zoxide_elements(choice_table, opts)
 	local stdout = run_child_process(pub.zoxide_path .. " query -l " .. (opts.extra_args or ""))
 
 	for _, path in ipairs(wezterm.split_by_newlines(stdout)) do
-		if path ~= "" then
-			local actual_path = path
-			local display_path = path
-			
-			-- If using WSL on Windows, convert paths
-			if is_windows and pub.use_wsl then
-				actual_path = wsl_to_windows_path(path, pub.wsl_distro)
-				display_path = format_display_path(actual_path)
-			else
-				display_path = string.gsub(path, wezterm.home_dir, "~")
-			end
-			
-			if not opts.workspace_ids[display_path] then
-				table.insert(choice_table, {
-					id = actual_path,  -- Use Windows UNC path for actual workspace
-					label = display_path,  -- Use nice display format
-				})
-			end
+		local updated_path = string.gsub(path, wezterm.home_dir, "~")
+		if not opts.workspace_ids[updated_path] then
+			table.insert(choice_table, {
+				id = path,
+				label = updated_path,
+			})
 		end
 	end
 	return choice_table
@@ -195,22 +137,7 @@ local function zoxide_chosen(window, pane, path, label_path)
 		label_path
 	)
 	-- increment zoxide path score
-	-- For WSL, we need to convert the Windows path back to WSL path for zoxide
-	local zoxide_add_path = path
-	if is_windows and pub.use_wsl then
-		-- For UNC paths like \\wsl$\Ubuntu\home\user\project, extract /home/user/project
-		local unc_match = path:match("^\\\\wsl%$\\[^\\]+(.*)$")
-		if unc_match then
-			zoxide_add_path = unc_match:gsub("\\", "/")
-		else
-			-- For C:\foo style, convert to /mnt/c/foo
-			local drive, rest = path:match("^(%a):\\(.*)$")
-			if drive then
-				zoxide_add_path = "/mnt/" .. drive:lower() .. "/" .. rest:gsub("\\", "/")
-			end
-		end
-	end
-	run_child_process(pub.zoxide_path .. " add " .. zoxide_add_path)
+	run_child_process(pub.zoxide_path .. " add " .. path)
 end
 
 ---InputSelector callback when workspace element is chosen
